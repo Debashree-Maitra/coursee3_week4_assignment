@@ -1,77 +1,128 @@
-## Create one R script called run_analysis.R that does the following:
-## 1. Merges the training and the test sets to create one data set.
-## 2. Extracts only the measurements on the mean and standard deviation for each measurement.
-## 3. Uses descriptive activity names to name the activities in the data set
-## 4. Appropriately labels the data set with descriptive activity names.
-## 5. Creates a second, independent tidy data set with the average of each variable for each activity and each subject.
+# run_analysis.R should do the following:
+#   
+#   1)  Merges the training and the test sets to create one data set.
+# 
+#   2)  Extracts only the measurements on the mean and standard deviation for each measurement. 
+# 
+#   3)  Uses descriptive activity names to name the activities in the data set
+# 
+#   4)  Appropriately labels the data set with descriptive variable names. 
+#   
+#   5)  From the data set in step 4, creates a second, independent tidy data set with the average
+#       of each variable for each activity and each subject.
 
-if (!require("data.table")) {
-  install.packages("data.table")
+#     Please upload the tidy data set created in step 5 of the instructions. 
+
+#     Please upload your data set as a txt file created with write.table() using row.name=FALSE 
+#     (do not cut and paste a dataset directly into the text box, as this may cause errors 
+#     saving your submission).
+
+# Load the needed packages
+packages <- c("data.table", "reshape2", "dplyr")
+sapply(packages, require, character.only=TRUE, quietly=TRUE)
+
+# Assumes the Git repository : https://github.com/dholtz/GettingAndCleaningData
+# has been cloned to a users local machine, and the R, setwd(), has been used 
+# to set the working directory to the root of this cloned repository.
+path <- getwd()
+
+# Give warning to set the working directory if not able to find data files.
+projectDataPath <- file.path(path, "project_data")
+fileCount <- length(list.files(projectDataPath, recursive=TRUE))
+if (fileCount != 28) {
+  stop("Please use setwd() to the root of the cloned repository.")
 }
 
-if (!require("reshape2")) {
-  install.packages("reshape2")
-}
+# Read in the 'Subject' data
+dtTrainingSubjects <- fread(file.path(projectDataPath, "train", "subject_train.txt"))
+dtTestSubjects  <- fread(file.path(projectDataPath, "test" , "subject_test.txt" ))
 
-require("data.table")
-require("reshape2")
+# Read in the 'Activity' data
+dtTrainingActivity <- fread(file.path(projectDataPath, "train", "Y_train.txt"))
+dtTestActivity  <- fread(file.path(projectDataPath, "test" , "Y_test.txt" ))
 
-# Load: activity labels
-activity_labels <- read.table("./UCI HAR Dataset/activity_labels.txt")[,2]
+# Read in the 'Measurements' data
+# Switching to standard, read.table to avoid the following possible error:
+# https://github.com/Rdatatable/data.table/issues/487
+# No time to figure out where this, 'works again now' version is
+dtTrainingMeasures <- data.table(read.table(file.path(projectDataPath, "train", "X_train.txt")))
+dtTestMeasures  <- data.table(read.table(file.path(projectDataPath, "test" , "X_test.txt")))
 
-# Load: data column names
-features <- read.table("./UCI HAR Dataset/features.txt")[,2]
+# Row merge the Training and Test Subjects
+# http://www.statmethods.net/management/merging.html
+dtSubjects <- rbind(dtTrainingSubjects, dtTestSubjects)
+# Why setnames() ?? http://stackoverflow.com/questions/10655438/rename-one-named-column-in-r
+setnames(dtSubjects, "V1", "subject")
 
-# Extract only the measurements on the mean and standard deviation for each measurement.
-extract_features <- grepl("mean|std", features)
+# Row merge the Training and Test Activities
+dtActivities <- rbind(dtTrainingActivity, dtTestActivity)
+setnames(dtActivities, "V1", "activityNumber")
 
-# Load and process X_test & y_test data.
-X_test <- read.table("./UCI HAR Dataset/test/X_test.txt")
-y_test <- read.table("./UCI HAR Dataset/test/y_test.txt")
-subject_test <- read.table("./UCI HAR Dataset/test/subject_test.txt")
+# Merge the Training and Test 'Measurements' data
+dtMeasures <- rbind(dtTrainingMeasures, dtTestMeasures)
 
-names(X_test) = features
+# Column merge the subjects to activities
+dtSubjectActivities <- cbind(dtSubjects, dtActivities)
+dtSubjectAtvitiesWithMeasures <- cbind(dtSubjectActivities, dtMeasures)
 
-# Extract only the measurements on the mean and standard deviation for each measurement.
-X_test = X_test[,extract_features]
+# Order all of the combined data by, subject and activity
+setkey(dtSubjectAtvitiesWithMeasures, subject, activityNumber)
 
-# Load activity labels
-y_test[,2] = activity_labels[y_test[,1]]
-names(y_test) = c("Activity_ID", "Activity_Label")
-names(subject_test) = "subject"
+## Read in the 'features.txt' 
+## This file matches up to the columns in the data.table, dtSubjectActivitiesWithMeasures
+## with the features/measures.
+dtAllFeatures <- fread(file.path(projectDataPath, "features.txt"))
+setnames(dtAllFeatures, c("V1", "V2"), c("measureNumber", "measureName"))
 
-# Bind data
-test_data <- cbind(as.data.table(subject_test), y_test, X_test)
+# Use grepl to just get features/measures related to mean and std
+dtMeanStdMeasures <- dtAllFeatures[grepl("(mean|std)\\(\\)", measureName)]
+# Create a column to 'index/cross reference' into the 'measure' headers
+# in dtSubjectActivitiesWithMeasures
+dtMeanStdMeasures$measureCode <- dtMeanStdMeasures[, paste0("V", measureNumber)]
 
-# Load and process X_train & y_train data.
-X_train <- read.table("./UCI HAR Dataset/train/X_train.txt")
-y_train <- read.table("./UCI HAR Dataset/train/y_train.txt")
+# Build up the columns to select from the data.table,
+# dtSubjectActivitiesWithMeasures
+columnsToSelect <- c(key(dtSubjectAtvitiesWithMeasures), dtMeanStdMeasures$measureCode)
+# Just take the rows with the columns of interest ( std() and mean() )
+dtSubjectActivitesWithMeasuresMeanStd <- subset(dtSubjectAtvitiesWithMeasures, 
+                                                select = columnsToSelect)
 
-subject_train <- read.table("./UCI HAR Dataset/train/subject_train.txt")
+# Read in the activity names and give them more meaningful names
+dtActivityNames <- fread(file.path(projectDataPath, "activity_labels.txt"))
+setnames(dtActivityNames, c("V1", "V2"), c("activityNumber", "activityName"))
 
-names(X_train) = features
+# Merge the 'meaningful activity names' with the 
+# dtSubjectActiitiesWithMeasuresMeanStd
+dtSubjectActivitesWithMeasuresMeanStd <- merge(dtSubjectActivitesWithMeasuresMeanStd, 
+                                               dtActivityNames, by = "activityNumber", 
+                                               all.x = TRUE)
 
-# Extract only the measurements on the mean and standard deviation for each measurement.
-X_train = X_train[,extract_features]
+# Sort the data.table, dtSubjectActivitesWithMeasuresMeanStd
+setkey(dtSubjectActivitesWithMeasuresMeanStd, subject, activityNumber, activityName)
 
-# Load activity data
-y_train[,2] = activity_labels[y_train[,1]]
-names(y_train) = c("Activity_ID", "Activity_Label")
-names(subject_train) = "subject"
+# Convert from a wide to narrow data.table using the keys created earlier
+dtSubjectActivitesWithMeasuresMeanStd <- data.table(melt(dtSubjectActivitesWithMeasuresMeanStd, 
+                                                         id=c("subject", "activityName"), 
+                                                         measure.vars = c(3:68), 
+                                                         variable.name = "measureCode", 
+                                                         value.name="measureValue"))
 
-# Bind data
-train_data <- cbind(as.data.table(subject_train), y_train, X_train)
+# Merge measure codes
+dtSubjectActivitesWithMeasuresMeanStd <- merge(dtSubjectActivitesWithMeasuresMeanStd, 
+                                               dtMeanStdMeasures[, list(measureNumber, measureCode, measureName)], 
+                                               by="measureCode", all.x=TRUE)
 
-# Merge test and train data
-data = rbind(test_data, train_data)
+# Convert activityName and measureName to factors
+dtSubjectActivitesWithMeasuresMeanStd$activityName <- 
+  factor(dtSubjectActivitesWithMeasuresMeanStd$activityName)
+dtSubjectActivitesWithMeasuresMeanStd$measureName <- 
+  factor(dtSubjectActivitesWithMeasuresMeanStd$measureName)
 
-id_labels   = c("subject", "Activity_ID", "Activity_Label")
-data_labels = setdiff(colnames(data), id_labels)
-melt_data      = melt(data, id = id_labels, measure.vars = data_labels)
+# Reshape the data to get the averages 
+measureAvgerages <- dcast(dtSubjectActivitesWithMeasuresMeanStd, 
+                          subject + activityName ~ measureName, 
+                          mean, 
+                          value.var="measureValue")
 
-# Apply mean function to dataset using dcast function
-tidy_data   = dcast(melt_data, subject + Activity_Label ~ variable, mean)
-
-write.table(tidy_data, file = "./tidy_data.txt")
-
-
+# Write the tab delimited file
+write.table(measureAvgerages, file="tidyData.txt", row.name=FALSE, sep = "\t")
